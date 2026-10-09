@@ -1,0 +1,8 @@
+[
+  {"scenario":"clean-low-risk","invoice_number":"NS-2026-1001","vendor":"Northstar Office Co.","total":2678.4,"risk":"low","decision":"auto_processed"},
+  {"scenario":"medium-confidence","invoice_number":"CP-8832","vendor":"Copperline Packaging","total":1468.8,"risk":"medium","decision":"review_required"},
+  {"scenario":"duplicate","invoice_number":"CP-8832","vendor":"Copperline Packaging","total":1468.8,"risk":"high","decision":"review_required"},
+  {"scenario":"arithmetic-mismatch","invoice_number":"MC-477","vendor":"Meridian Cloud Services","total":5036,"risk":"high","decision":"review_required"},
+  {"scenario":"missing-po","invoice_number":"HI-2914","vendor":"Harbor Industrial Supply","total":9450,"risk":"high","decision":"review_required"},
+  {"scenario":"high-value","invoice_number":"AFP-90118","vendor":"Atlas Freight Partners","total":52164,"risk":"high","decision":"review_required"}
+]
