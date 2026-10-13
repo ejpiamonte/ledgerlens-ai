@@ -81,3 +81,8 @@ Tests cover arithmetic, dates, duplicate detection, confidence, decision rules, 
 ## Next steps
 
 Seed the Supabase project with the six sample records, add authenticated multi-tenant access and durable asynchronous job processing, and integrate an accounting export adapter behind human-approved records.
+
+
+## Shared Supabase setup
+
+To share the existing Northstar project with LedgerLens and Niven, see [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md) and [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md). Inspect hosted metadata before applying [the additive SQL](supabase/shared/002_add_to_existing_northstar.sql). The empty bootstrap is for empty destinations only. No existing records or files are imported. SQL execution against Supabase remains pending.
