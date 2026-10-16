@@ -1,32 +1,224 @@
 import { z } from 'zod';
 import type { Invoice, Risk, Status } from './types';
-const extractedField=z.object({value:z.string().nullable(),confidence:z.number().min(0).max(1)});
-const amountField=z.object({value:z.number().nullable(),confidence:z.number().min(0).max(1)});
-export const extractionSchema=z.object({vendor_name:extractedField,invoice_number:extractedField,invoice_date:extractedField,due_date:extractedField,po_number:extractedField,currency:extractedField,subtotal:amountField,tax:amountField,total:amountField,payment_terms:z.string().nullable(),line_items:z.array(z.object({description:z.string(),quantity:z.number(),unit_price:z.number(),amount:z.number(),confidence:z.number().min(0).max(1)})),confidence:z.number().min(0).max(1),missing_fields:z.array(z.string()),suspicious_signals:z.array(z.string()),extraction_notes:z.string()}).strict();
-export type Extraction= z.infer<typeof extractionSchema>;
-export const normalizeName=(name:string)=>name.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]/g,'');
-export const validateArithmetic=(subtotal:number,tax:number,total:number,tolerance=.02)=>Math.abs(subtotal+tax-total)<=tolerance;
-export const validateDates=(invoiceDate:string,dueDate:string|null)=>!dueDate||new Date(dueDate)>=new Date(invoiceDate);
-export const isIsoDate=(value:string|null)=>!value||(/^\d{4}-\d{2}-\d{2}$/.test(value)&&!Number.isNaN(Date.parse(`${value}T00:00:00Z`))&&new Date(`${value}T00:00:00Z`).toISOString().slice(0,10)===value);
-export const isDuplicate=(candidate:Pick<Invoice,'vendor'|'invoiceNumber'|'total'>,existing:Invoice[])=>existing.some(i=>normalizeName(i.vendor)===normalizeName(candidate.vendor)&&i.invoiceNumber.toLowerCase()===candidate.invoiceNumber.toLowerCase()&&Math.abs(i.total-candidate.total)<=.02);
-export const classifyConfidence=(confidence:number,autoThreshold=.9,reviewThreshold=.7):Risk=>confidence>=autoThreshold?'low':confidence>=reviewThreshold?'medium':'high';
-export function decide(risk:Risk,failures:number,total:number,duplicate:boolean,highValueThreshold=25000):{risk:Risk;status:Status;reason:string}{if(duplicate)return{risk:'high',status:'review_required',reason:'Possible duplicate: matching vendor, invoice number, and total.'};if(failures)return{risk:'high',status:'review_required',reason:'A deterministic validation failed; human review is required.'};if(total>highValueThreshold)return{risk:'high',status:'review_required',reason:`High-value invoice exceeds the $${highValueThreshold.toLocaleString()} approval threshold.`};if(risk==='high')return{risk,status:'review_required',reason:'Extraction confidence is below the safe processing threshold.'};if(risk==='medium')return{risk,status:'review_required',reason:'Medium extraction confidence requires verification.'};return{risk:'low',status:'auto_processed',reason:'High confidence and all deterministic checks passed.'};}
-export type RuleCheck={validation_type:string;status:'passed'|'failed';severity:'info'|'high'|'critical';message:string;expected_value?:unknown;actual_value?:unknown;metadata?:Record<string,unknown>};
-export function evaluateExtraction(e:Extraction,options:{duplicate:boolean;poValid:boolean;arithmeticTolerance?:number;highValueThreshold?:number;autoConfidenceThreshold?:number;reviewConfidenceThreshold?:number}){
- const vendor=e.vendor_name.value?.trim()||null,number=e.invoice_number.value?.trim()||null,date=e.invoice_date.value,due=e.due_date.value,po=e.po_number.value?.trim()||null,currency=e.currency.value?.trim().toUpperCase()||null,subtotal=e.subtotal.value,tax=e.tax.value,total=e.total.value;
- const required:[string,string|null|number][]=[['vendor',vendor],['invoice number',number],['invoice date',date],['total',total],['currency',currency]];
- const missing=required.filter(([,value])=>value===null||value==='').map(([name])=>name);
- const checks:RuleCheck[]=[{validation_type:'required_fields',status:missing.length?'failed':'passed',severity:missing.length?'critical':'info',message:missing.length?`Missing required fields: ${missing.join(', ')}.`:'All critical fields are present.',metadata:{missing}}];
- const currencyValid=currency!==null&&/^[A-Z]{3}$/.test(currency);
- if(currency&&!currencyValid)checks.push({validation_type:'currency',status:'failed',severity:'critical',message:'Currency must be a three-letter ISO code.',actual_value:currency});
- const arithmetic=subtotal!==null&&tax!==null&&total!==null&&validateArithmetic(subtotal,tax,total,options.arithmeticTolerance??.02);
- checks.push({validation_type:'arithmetic',status:arithmetic?'passed':'failed',severity:arithmetic?'info':'critical',message:arithmetic?'Subtotal plus tax matches the extracted total.':'Subtotal, tax, or total is missing or the values do not reconcile.',expected_value:subtotal!==null&&tax!==null?subtotal+tax:null,actual_value:total});
- const datesValid=isIsoDate(date)&&isIsoDate(due)&&validateDates(date??'',due);
- checks.push({validation_type:'dates',status:datesValid?'passed':'failed',severity:datesValid?'info':'high',message:datesValid?'Invoice and due dates are valid.':'Invoice date is invalid or due date precedes invoice date.'});
- checks.push({validation_type:'purchase_order',status:options.poValid?'passed':'failed',severity:options.poValid?'info':'high',message:options.poValid?`Purchase order ${po} is open.`:po?`Purchase order ${po} is not in the approved open PO registry.`:'Purchase-order reference is missing.'});
- checks.push({validation_type:'duplicate',status:options.duplicate?'failed':'passed',severity:options.duplicate?'critical':'info',message:options.duplicate?'A prior invoice has the same vendor, invoice number, and amount.':'No matching vendor, invoice number, and amount found.'});
- if(e.suspicious_signals.length)checks.push({validation_type:'suspicious_signals',status:'failed',severity:'critical',message:'Extraction flagged a suspicious document signal.',metadata:{signals:e.suspicious_signals}});
- const failures=checks.filter(v=>v.status==='failed').length,confidenceRisk=classifyConfidence(e.confidence,options.autoConfidenceThreshold??.9,options.reviewConfidenceThreshold??.7),decision=decide(confidenceRisk,failures,total??0,options.duplicate,options.highValueThreshold??25000),risk=e.suspicious_signals.length?'high':decision.risk,status=risk==='high'&&decision.status==='auto_processed'?'review_required':decision.status;
- const reason=e.suspicious_signals.length?`Suspicious signals require review: ${e.suspicious_signals.join('; ')}.`:decision.reason;
- return{checks,risk,status,reason,confidenceRisk,failures};
+const extractedField = z.object({ value: z.string().nullable(), confidence: z.number().min(0).max(1) });
+const amountField = z.object({ value: z.number().nullable(), confidence: z.number().min(0).max(1) });
+export const extractionSchema = z
+  .object({
+    vendor_name: extractedField,
+    invoice_number: extractedField,
+    invoice_date: extractedField,
+    due_date: extractedField,
+    po_number: extractedField,
+    currency: extractedField,
+    subtotal: amountField,
+    tax: amountField,
+    total: amountField,
+    payment_terms: z.string().nullable(),
+    line_items: z.array(
+      z.object({
+        description: z.string(),
+        quantity: z.number(),
+        unit_price: z.number(),
+        amount: z.number(),
+        confidence: z.number().min(0).max(1),
+      }),
+    ),
+    confidence: z.number().min(0).max(1),
+    missing_fields: z.array(z.string()),
+    suspicious_signals: z.array(z.string()),
+    extraction_notes: z.string(),
+  })
+  .strict();
+export type Extraction = z.infer<typeof extractionSchema>;
+export const normalizeName = (name: string) =>
+  name
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[^a-z0-9]/g, '');
+export const validateArithmetic = (subtotal: number, tax: number, total: number, tolerance = 0.02) =>
+  Math.abs(subtotal + tax - total) <= tolerance;
+export const validateDates = (invoiceDate: string, dueDate: string | null) =>
+  !dueDate || new Date(dueDate) >= new Date(invoiceDate);
+export const isIsoDate = (value: string | null) =>
+  !value ||
+  (/^\d{4}-\d{2}-\d{2}$/.test(value) &&
+    !Number.isNaN(Date.parse(`${value}T00:00:00Z`)) &&
+    new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value);
+export const isDuplicate = (
+  candidate: Pick<Invoice, 'vendor' | 'invoiceNumber' | 'total'>,
+  existing: Invoice[],
+) =>
+  existing.some(
+    (i) =>
+      normalizeName(i.vendor) === normalizeName(candidate.vendor) &&
+      i.invoiceNumber.toLowerCase() === candidate.invoiceNumber.toLowerCase() &&
+      Math.abs(i.total - candidate.total) <= 0.02,
+  );
+export const classifyConfidence = (confidence: number, autoThreshold = 0.9, reviewThreshold = 0.7): Risk =>
+  confidence >= autoThreshold ? 'low' : confidence >= reviewThreshold ? 'medium' : 'high';
+export function decide(
+  risk: Risk,
+  failures: number,
+  total: number,
+  duplicate: boolean,
+  highValueThreshold = 25000,
+): { risk: Risk; status: Status; reason: string } {
+  if (duplicate)
+    return {
+      risk: 'high',
+      status: 'review_required',
+      reason: 'Possible duplicate: matching vendor, invoice number, and total.',
+    };
+  if (failures)
+    return {
+      risk: 'high',
+      status: 'review_required',
+      reason: 'A deterministic validation failed; human review is required.',
+    };
+  if (total > highValueThreshold)
+    return {
+      risk: 'high',
+      status: 'review_required',
+      reason: `High-value invoice exceeds the $${highValueThreshold.toLocaleString()} approval threshold.`,
+    };
+  if (risk === 'high')
+    return {
+      risk,
+      status: 'review_required',
+      reason: 'Extraction confidence is below the safe processing threshold.',
+    };
+  if (risk === 'medium')
+    return { risk, status: 'review_required', reason: 'Medium extraction confidence requires verification.' };
+  return {
+    risk: 'low',
+    status: 'auto_processed',
+    reason: 'High confidence and all deterministic checks passed.',
+  };
+}
+export type RuleCheck = {
+  validation_type: string;
+  status: 'passed' | 'failed';
+  severity: 'info' | 'high' | 'critical';
+  message: string;
+  expected_value?: unknown;
+  actual_value?: unknown;
+  metadata?: Record<string, unknown>;
+};
+export function evaluateExtraction(
+  e: Extraction,
+  options: {
+    duplicate: boolean;
+    poValid: boolean;
+    arithmeticTolerance?: number;
+    highValueThreshold?: number;
+    autoConfidenceThreshold?: number;
+    reviewConfidenceThreshold?: number;
+  },
+) {
+  const vendor = e.vendor_name.value?.trim() || null,
+    number = e.invoice_number.value?.trim() || null,
+    date = e.invoice_date.value,
+    due = e.due_date.value,
+    po = e.po_number.value?.trim() || null,
+    currency = e.currency.value?.trim().toUpperCase() || null,
+    subtotal = e.subtotal.value,
+    tax = e.tax.value,
+    total = e.total.value;
+  const required: [string, string | null | number][] = [
+    ['vendor', vendor],
+    ['invoice number', number],
+    ['invoice date', date],
+    ['total', total],
+    ['currency', currency],
+  ];
+  const missing = required.filter(([, value]) => value === null || value === '').map(([name]) => name);
+  const checks: RuleCheck[] = [
+    {
+      validation_type: 'required_fields',
+      status: missing.length ? 'failed' : 'passed',
+      severity: missing.length ? 'critical' : 'info',
+      message: missing.length
+        ? `Missing required fields: ${missing.join(', ')}.`
+        : 'All critical fields are present.',
+      metadata: { missing },
+    },
+  ];
+  const currencyValid = currency !== null && /^[A-Z]{3}$/.test(currency);
+  if (currency && !currencyValid)
+    checks.push({
+      validation_type: 'currency',
+      status: 'failed',
+      severity: 'critical',
+      message: 'Currency must be a three-letter ISO code.',
+      actual_value: currency,
+    });
+  const arithmetic =
+    subtotal !== null &&
+    tax !== null &&
+    total !== null &&
+    validateArithmetic(subtotal, tax, total, options.arithmeticTolerance ?? 0.02);
+  checks.push({
+    validation_type: 'arithmetic',
+    status: arithmetic ? 'passed' : 'failed',
+    severity: arithmetic ? 'info' : 'critical',
+    message: arithmetic
+      ? 'Subtotal plus tax matches the extracted total.'
+      : 'Subtotal, tax, or total is missing or the values do not reconcile.',
+    expected_value: subtotal !== null && tax !== null ? subtotal + tax : null,
+    actual_value: total,
+  });
+  const datesValid = isIsoDate(date) && isIsoDate(due) && validateDates(date ?? '', due);
+  checks.push({
+    validation_type: 'dates',
+    status: datesValid ? 'passed' : 'failed',
+    severity: datesValid ? 'info' : 'high',
+    message: datesValid
+      ? 'Invoice and due dates are valid.'
+      : 'Invoice date is invalid or due date precedes invoice date.',
+  });
+  checks.push({
+    validation_type: 'purchase_order',
+    status: options.poValid ? 'passed' : 'failed',
+    severity: options.poValid ? 'info' : 'high',
+    message: options.poValid
+      ? `Purchase order ${po} is open.`
+      : po
+        ? `Purchase order ${po} is not in the approved open PO registry.`
+        : 'Purchase-order reference is missing.',
+  });
+  checks.push({
+    validation_type: 'duplicate',
+    status: options.duplicate ? 'failed' : 'passed',
+    severity: options.duplicate ? 'critical' : 'info',
+    message: options.duplicate
+      ? 'A prior invoice has the same vendor, invoice number, and amount.'
+      : 'No matching vendor, invoice number, and amount found.',
+  });
+  if (e.suspicious_signals.length)
+    checks.push({
+      validation_type: 'suspicious_signals',
+      status: 'failed',
+      severity: 'critical',
+      message: 'Extraction flagged a suspicious document signal.',
+      metadata: { signals: e.suspicious_signals },
+    });
+  const failures = checks.filter((v) => v.status === 'failed').length,
+    confidenceRisk = classifyConfidence(
+      e.confidence,
+      options.autoConfidenceThreshold ?? 0.9,
+      options.reviewConfidenceThreshold ?? 0.7,
+    ),
+    decision = decide(
+      confidenceRisk,
+      failures,
+      total ?? 0,
+      options.duplicate,
+      options.highValueThreshold ?? 25000,
+    ),
+    risk = e.suspicious_signals.length ? 'high' : decision.risk,
+    status = risk === 'high' && decision.status === 'auto_processed' ? 'review_required' : decision.status;
+  const reason = e.suspicious_signals.length
+    ? `Suspicious signals require review: ${e.suspicious_signals.join('; ')}.`
+    : decision.reason;
+  return { checks, risk, status, reason, confidenceRisk, failures };
 }

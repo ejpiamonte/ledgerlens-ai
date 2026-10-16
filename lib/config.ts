@@ -1,1 +1,1 @@
-export const isDemoMode=()=>process.env.DEMO_MODE!=='false';
+export const isDemoMode = () => process.env.DEMO_MODE !== 'false';

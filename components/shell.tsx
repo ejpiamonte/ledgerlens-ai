@@ -1,7 +1,142 @@
 'use client';
-import Link from 'next/link';import {usePathname} from 'next/navigation';import type {ReactNode} from 'react';import {Activity,ArrowUpRight,CheckCheck,FileClock,Files,LayoutDashboard,Settings,ShieldCheck,Truck,Upload,BrainCircuit} from 'lucide-react';
-const links=[['Overview','/',LayoutDashboard],['Documents','/documents',Files],['Review queue','/review',CheckCheck],['Automation runs','/runs',Activity],['Vendors','/vendors',Truck],['Settings','/settings',Settings]] as const;
-export function Shell({children,demoMode}:{children:ReactNode;demoMode:boolean}){const path=usePathname();return <><aside className="sidebar"><Link href="/" className="brand"><i className="brandmark"><BrainCircuit size={18}/></i><span>LedgerLens <span style={{color:'#5879a8'}}>AI</span></span></Link><div className="navlabel">Workspace</div>{links.map(([label,href,Icon])=><Link key={href} href={href} className={`navlink ${path===href||href!=='/'&&path.startsWith(href)?'active':''}`}><Icon size={17}/><span>{label}</span></Link>)}<div style={{flex:1}}/><div className="panel sidefoot" style={{padding:12,background:'#f8fafc'}}><div style={{fontWeight:700,display:'flex',gap:6,alignItems:'center'}}><ShieldCheck size={14} color="#26805c"/> Automation active</div><div className="secondary">Rules engine ready · {demoMode?'Sample invoices':'Live processing'}</div><Link href="/settings" className="secondary" style={{display:'block',marginTop:8}}>Configure integrations <ArrowUpRight size={12}/></Link></div></aside><main className="main"><header className="topbar"><div className="eyebrow" style={{display:'flex',alignItems:'center',gap:8}}><FileClock size={15}/> Invoice operations</div><div style={{display:'flex',alignItems:'center',gap:12}}><span className="demo">{demoMode?'DEMO MODE':'LIVE MODE'}</span><span className="eyebrow hide-mobile">Workspace · Acme Operations</span><span style={{width:30,height:30,borderRadius:20,display:'grid',placeItems:'center',background:'#e8eef8',fontSize:11,fontWeight:700}}>AO</span></div></header><div className="content">{children}</div></main></>}
-export function PageHead({title,subtitle,action}:{title:string;subtitle:string;action?:ReactNode}){return <div className="pagehead"><div><div className="eyebrow">LEDGERLENS AI</div><h1 className="title">{title}</h1><p className="subtitle">{subtitle}</p></div>{action}</div>}
-export function Badge({children,tone=''}:{children:ReactNode;tone?:string}){return <span className={`badge ${tone}`}>{children}</span>}
-export function UploadLink(){return <Link href="/documents#upload" className="btn primary"><Upload size={15}/> Upload document</Link>}
+
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
+import type { ReactNode } from 'react';
+import {
+  Activity,
+  BookOpen,
+  BrainCircuit,
+  CheckCheck,
+  Files,
+  LayoutDashboard,
+  Settings,
+  ShieldCheck,
+  Truck,
+} from 'lucide-react';
+import { ScenarioSwitch } from './scenario-switch';
+import type { ScenarioId } from '@/lib/scenarios';
+
+type NavItem = { label: string; href: string; Icon: typeof Files; count?: boolean };
+
+const GROUPS: { title: string; items: NavItem[] }[] = [
+  {
+    title: 'Operate',
+    items: [
+      { label: 'Overview', href: '/', Icon: LayoutDashboard },
+      { label: 'Review queue', href: '/review', Icon: CheckCheck, count: true },
+      { label: 'Documents', href: '/documents', Icon: Files },
+    ],
+  },
+  {
+    title: 'Insights',
+    items: [
+      { label: 'Vendors', href: '/vendors', Icon: Truck },
+      { label: 'Automation runs', href: '/runs', Icon: Activity },
+    ],
+  },
+  {
+    title: 'Configure',
+    items: [
+      { label: 'Rules & settings', href: '/settings', Icon: Settings },
+      { label: 'How it works', href: '/how-it-works', Icon: BookOpen },
+    ],
+  },
+];
+
+export type ShellWorkspace = {
+  scenarioId: ScenarioId;
+  company: string;
+  initials: string;
+  tagline: string;
+};
+
+export function Shell({
+  children,
+  demoMode,
+  workspace,
+  reviewCount,
+}: {
+  children: ReactNode;
+  demoMode: boolean;
+  workspace: ShellWorkspace;
+  reviewCount: number;
+}) {
+  const path = usePathname();
+  const active = (href: string) =>
+    href === '/' ? path === '/' : path === href || path.startsWith(`${href}/`);
+
+  return (
+    <>
+      <a href="#main" className="skip">
+        Skip to content
+      </a>
+      <aside className="sidebar">
+        <Link href="/" className="brand" aria-label="LedgerLens AI home">
+          <span className="brandmark">
+            <BrainCircuit size={18} aria-hidden />
+          </span>
+          <span>
+            LedgerLens <span style={{ color: '#5879a8' }}>AI</span>
+          </span>
+        </Link>
+        <nav aria-label="Main">
+          {GROUPS.map((group) => (
+            <div key={group.title}>
+              <div className="navlabel">{group.title}</div>
+              {group.items.map(({ label, href, Icon, count }) => (
+                <Link
+                  key={href}
+                  href={href}
+                  className={`navlink ${active(href) ? 'active' : ''}`}
+                  aria-current={active(href) ? 'page' : undefined}
+                  title={label}
+                >
+                  <Icon size={17} aria-hidden />
+                  <span>{label}</span>
+                  {count && reviewCount > 0 && (
+                    <b className="navcount" aria-label={`${reviewCount} waiting`}>
+                      {reviewCount}
+                    </b>
+                  )}
+                </Link>
+              ))}
+            </div>
+          ))}
+        </nav>
+        <div style={{ flex: 1 }} />
+        <div className="panel sidefoot">
+          <div style={{ fontWeight: 700, display: 'flex', gap: 6, alignItems: 'center' }}>
+            <ShieldCheck size={14} color="#26805c" aria-hidden /> Human in the loop
+          </div>
+          <div className="secondary">
+            AI proposes, rules decide, people approve exceptions.{' '}
+            {demoMode ? 'All data here is fictional.' : 'Live processing is on.'}
+          </div>
+        </div>
+      </aside>
+      <main className="main">
+        <header className="topbar">
+          <div className="workspace">
+            <span className="avatar" aria-hidden>
+              {workspace.initials}
+            </span>
+            <div style={{ minWidth: 0 }}>
+              <div className="workspace-name">{workspace.company}</div>
+              <div className="workspace-sub hide-mobile">{workspace.tagline}</div>
+            </div>
+          </div>
+          <div className="topbar-right">
+            {demoMode && <ScenarioSwitch current={workspace.scenarioId} />}
+            <span className="demo" title={demoMode ? 'Fictional sample data' : 'Connected to Supabase'}>
+              {demoMode ? 'DEMO DATA' : 'LIVE'}
+            </span>
+          </div>
+        </header>
+        <div className="content" id="main">
+          {children}
+        </div>
+      </main>
+    </>
+  );
+}

@@ -1,2 +1,117 @@
-import Link from'next/link';import{notFound}from'next/navigation';import{ArrowLeft,FileText}from'lucide-react';import{getInvoiceExtra,getWorkspaceInvoice}from'@/lib/supabase/workspace';import{PageHead,Badge}from'@/components/shell';
-export default async function DocumentDetail({params}:{params:Promise<{id:string}>}){const{id}=await params;const i=await getWorkspaceInvoice(id);if(!i)notFound();const extra=await getInvoiceExtra(i.documentId),items=extra?.items??i.lineItems,checks=extra?.validations??i.validations,normalized=extra?.normalized as {extraction_notes?:string}|null,latestAudit=extra?.audit?.[0];return <><PageHead title={i.filename} subtitle={`Received from ${i.source} · Document ${i.documentId}`} action={<Link className="btn" href="/documents"><ArrowLeft size={14}/> Documents</Link>}/><div className="grid two"><div><section className="panel" style={{minHeight:300,display:'grid',placeItems:'center',background:'#f0f3f8'}}><div style={{textAlign:'center',color:'#76869b'}}><FileText size={38}/><div className="primarytext" style={{marginTop:10}}>{i.filename}</div>{extra?.previewUrl?<a className="btn" style={{marginTop:12}} href={extra.previewUrl} target="_blank" rel="noreferrer">Open original document</a>:<div className="secondary">Sample preview unavailable in Demo Mode.</div>}</div></section><section className="panel" style={{marginTop:15}}><h2 className="panel-title">Line items</h2>{items.length?<table><thead><tr><th>Description</th><th>Qty</th><th>Unit price</th><th>Amount</th></tr></thead><tbody>{items.map((l,k)=><tr key={k}><td>{l.description}</td><td>{l.quantity}</td><td>{i.currency} {Number(l.unit_price).toLocaleString()}</td><td className="primarytext">{i.currency} {Number(l.amount).toLocaleString()}</td></tr>)}</tbody></table>:<div className="secondary">No line items were extracted.</div>}</section></div><div><section className="panel"><h2 className="panel-title">Extracted invoice</h2><div className="kv">{[['Vendor',i.vendor],['Invoice number',i.invoiceNumber],['Invoice date',i.invoiceDate],['Due date',i.dueDate??'Not found'],['Purchase order',i.poNumber??'Not found'],['Currency',i.currency],['Subtotal',`${i.currency} ${i.subtotal.toLocaleString()}`],['Tax',`${i.currency} ${i.tax.toLocaleString()}`],['Total',`${i.currency} ${i.total.toLocaleString()}`],['Confidence',`${Math.round(i.confidence*100)}%`]].map(([k,v])=><div className="kvitem" key={k}><div className="kvlabel">{k}</div><div className="kvvalue">{v}</div></div>)}</div></section><section className="panel" style={{marginTop:14}}><h2 className="panel-title">Decision & risk</h2><div style={{display:'flex',gap:8,marginBottom:10}}><Badge tone={i.risk==='high'?'red':i.risk==='medium'?'amber':'green'}>{i.risk.toUpperCase()} RISK</Badge><Badge tone={i.status==='auto_processed'?'green':i.status==='approved'?'blue':'amber'}>{i.status.replace('_',' ')}</Badge></div><p className="subtitle">{extra?.review?.reason??i.reason}</p>{normalized?.extraction_notes&&<div className="secondary" style={{marginTop:10}}>Extraction note: {normalized.extraction_notes}</div>}</section><section className="panel" style={{marginTop:14}}><h2 className="panel-title">Validation checks</h2>{checks.length?checks.map((v,k)=>{const label='validation_type'in v?v.validation_type:v.name,status=v.status;return <div className="event" key={`${label}-${k}`} style={{paddingBottom:13}}><div style={{fontWeight:650}}>{label.replaceAll('_',' ')} <Badge tone={status==='passed'?'green':status==='failed'?'red':'amber'}>{status}</Badge></div><div className="secondary">{v.message}</div></div>}):<div className="secondary">No checks are available.</div>}</section><section className="panel" style={{marginTop:14}}><h2 className="panel-title">Processing timeline</h2><div className="timeline">{extra?.runs?.[0]?.steps?.length?extra.runs[0].steps.map((s: {key:string;label:string;status:string;detail:string},k:number)=><div className={`event ${s.status==='warning'?'warn':s.status==='failed'?'fail':''}`} key={`${s.key}-${k}`}><div style={{fontWeight:650}}>{s.label}</div><div className="secondary">{s.detail}</div></div>):['Document received','File type and size validated','Structured fields extracted','Business validations completed',i.status==='auto_processed'?'Automatically processed':'Routed to human review'].map((s,k)=><div className={`event ${k===4&&i.risk==='high'?'warn':''}`} key={s}><div style={{fontWeight:650}}>{s}</div><div className="secondary">{k===2?'Demo extraction · deterministic fixture':'Completed · recorded for audit'}</div></div>)}</div>{latestAudit&&<div className="secondary" style={{marginTop:12}}>Latest audit: {latestAudit.description}</div>}</section></div></div></>}
+import Link from 'next/link';
+import { notFound } from 'next/navigation';
+import { ArrowRight, ExternalLink } from 'lucide-react';
+import { getInvoiceExtra, getWorkspaceInvoice } from '@/lib/supabase/workspace';
+import { PageHead, RiskBadge, StatusBadge } from '@/components/ui';
+import { InvoicePreview } from '@/components/invoice-preview';
+import { AuditTrail, ChecksList, FieldsPanel, RunTimeline } from '@/components/invoice-detail';
+import { DecisionReset } from '@/components/review-actions';
+import { isDemoMode } from '@/lib/config';
+import { scenarioOfId } from '@/lib/demo-data';
+import { SCENARIOS } from '@/lib/scenarios';
+import { EXCEPTION_LABEL } from '@/lib/labels';
+import { dateTime } from '@/lib/format';
+
+export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) {
+  const i = await getWorkspaceInvoice((await params).id);
+  return { title: i ? `${i.vendor} ${i.invoiceNumber}` : 'Document' };
+}
+
+export default async function DocumentDetail({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const i = await getWorkspaceInvoice(id);
+  if (!i) notFound();
+  const extra = await getInvoiceExtra(i.documentId);
+  const scenario = SCENARIOS[scenarioOfId(i.id) ?? 'smb'];
+  const auto = isDemoMode() ? scenario.autoConfidence : 0.9;
+  const invoice = extra?.items?.length ? { ...i, lineItems: extra.items } : i;
+  const checks = extra?.validations ?? i.validations;
+  const steps = extra?.runs?.[0]?.steps ?? i.steps ?? [];
+  const audit = extra?.audit ?? i.audit ?? [];
+  const notes = (extra?.normalized as { extraction_notes?: string } | null)?.extraction_notes;
+
+  return (
+    <>
+      <PageHead
+        crumbs={[{ label: 'Documents', href: '/documents' }, { label: i.invoiceNumber }]}
+        title={`${i.vendor} · ${i.invoiceNumber}`}
+        subtitle={`${i.filename} · received ${dateTime(i.createdAt)} UTC via ${i.source}`}
+        action={
+          <>
+            {extra?.previewUrl && (
+              <a className="btn" href={extra.previewUrl} target="_blank" rel="noreferrer">
+                <ExternalLink size={14} aria-hidden /> Original file
+              </a>
+            )}
+            {i.status === 'review_required' && (
+              <Link className="btn primary" href={`/review/${i.id}`}>
+                Review this invoice <ArrowRight size={14} aria-hidden />
+              </Link>
+            )}
+          </>
+        }
+      />
+
+      <div className="grid two">
+        <div className="stack">
+          <InvoicePreview invoice={invoice} autoConfidence={auto} />
+          <section className="panel">
+            <h2 className="panel-title">Processing timeline</h2>
+            {steps.length ? (
+              <RunTimeline steps={steps} />
+            ) : (
+              <div className="secondary">No run recorded yet.</div>
+            )}
+          </section>
+        </div>
+
+        <div className="stack">
+          <section className="panel">
+            <div className="panel-head">
+              <h2 className="panel-title">Decision</h2>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <StatusBadge status={i.status} />
+                <RiskBadge risk={i.risk} />
+              </div>
+            </div>
+            <p style={{ margin: 0 }}>
+              {i.exception ? <b>{EXCEPTION_LABEL[i.exception]}. </b> : null}
+              {extra?.review?.reason ?? i.reason}
+            </p>
+            {i.decidedBy && (
+              <div className="callout blue" style={{ marginTop: 12 }}>
+                <b>
+                  {i.status === 'approved' ? 'Approved' : 'Rejected'} by {i.decidedBy}
+                </b>
+                {i.decisionNote ?? 'No note recorded.'} · {dateTime(i.decidedAt!)} UTC
+                {isDemoMode() && i.decidedBy.startsWith('You') && (
+                  <div style={{ marginTop: 8 }}>
+                    <DecisionReset id={i.id} />
+                  </div>
+                )}
+              </div>
+            )}
+            {(notes ?? i.steps) && (
+              <div className="secondary" style={{ marginTop: 10 }}>
+                AI extraction is advisory. Deterministic rules and a person decide the outcome.
+                {notes && ` Extraction note: ${notes}`}
+              </div>
+            )}
+          </section>
+
+          <FieldsPanel invoice={i} autoConfidence={auto} />
+
+          <section className="panel">
+            <h2 className="panel-title">Validation checks</h2>
+            <ChecksList checks={checks} />
+          </section>
+
+          <section className="panel">
+            <h2 className="panel-title">Audit trail</h2>
+            <AuditTrail events={audit} />
+          </section>
+        </div>
+      </div>
+    </>
+  );
+}

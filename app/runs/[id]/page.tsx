@@ -1,2 +1,57 @@
-import{notFound}from'next/navigation';import{getInvoiceExtra,getWorkspaceInvoice}from'@/lib/supabase/workspace';import{PageHead,Badge}from'@/components/shell';
-export default async function RunDetail({params}:{params:Promise<{id:string}>}){const{id}=await params;const i=await getWorkspaceInvoice(id);if(!i)notFound();const extra=await getInvoiceExtra(i.documentId),run=extra?.runs?.[0],steps=run?.steps??[['Validate file','Supported file type and size verified.'],['Extract document content','Document content analyzed.'],['Validate structured output','Structured fields checked against the extraction schema.'],['Normalize invoice data','Dates, currency, and vendor normalized.'],['Check duplicate','Vendor, invoice number, and amount compared.'],['Validate financial data','Arithmetic, date, PO, confidence, and value checks applied.'],['Apply business rules',i.reason],['Route decision',i.status==='auto_processed'?'Approved by deterministic rules.':'Held for human review.']].map(([label,detail])=>({key:String(label),label:String(label),detail:String(detail),status:'success',duration_ms:0}));return <><PageHead title={`Run · ${run?.id??i.invoiceNumber}`} subtitle={`Document ${i.filename} · ${process.env.DEMO_MODE==='false'?'Live':'Demo'} mode`} /><section className="panel"><div className="timeline">{steps.map((s:{key:string;label:string;detail:string;status:string;durationMs?:number;duration_ms?:number},k:number)=><div className={`event ${s.status==='warning'?'warn':s.status==='failed'?'fail':''}`} key={`${s.key}-${k}`}><div style={{display:'flex',justifyContent:'space-between',gap:10}}><strong>{s.label}</strong><Badge tone={s.status==='failed'?'red':s.status==='warning'?'amber':'green'}>{s.status}</Badge></div><div className="secondary">{s.detail}</div><div className="secondary">{s.durationMs??s.duration_ms??0} ms</div></div>)}</div>{run?.error&&<div className="secondary" style={{marginTop:12}}>Run diagnostic: {run.error}</div>}</section></>}
+import Link from 'next/link';
+import { notFound } from 'next/navigation';
+import { ArrowRight } from 'lucide-react';
+import { getInvoiceExtra, getWorkspaceInvoice } from '@/lib/supabase/workspace';
+import { PageHead, StatusBadge } from '@/components/ui';
+import { AuditTrail, RunTimeline } from '@/components/invoice-detail';
+import { isDemoMode } from '@/lib/config';
+import { dateTime, duration } from '@/lib/format';
+
+export const metadata = { title: 'Run detail' };
+
+export default async function RunDetail({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const i = await getWorkspaceInvoice(id);
+  if (!i) notFound();
+  const extra = await getInvoiceExtra(i.documentId);
+  const run = extra?.runs?.[0];
+  const steps = run?.steps ?? i.steps ?? [];
+
+  return (
+    <>
+      <PageHead
+        crumbs={[{ label: 'Automation runs', href: '/runs' }, { label: i.invoiceNumber }]}
+        title={`Run for ${i.vendor} ${i.invoiceNumber}`}
+        subtitle={`${isDemoMode() ? 'Demo' : 'Live'} run · triggered by ${i.source} · started ${dateTime(i.createdAt)} UTC${i.processingMs ? ` · ${duration(i.processingMs)} end to end` : ''}`}
+        action={
+          <Link className="btn" href={`/documents/${i.id}`}>
+            Open document <ArrowRight size={14} aria-hidden />
+          </Link>
+        }
+      />
+      <div className="grid two">
+        <section className="panel">
+          <div className="panel-head">
+            <h2 className="panel-title">Pipeline steps</h2>
+            <StatusBadge status={i.status} />
+          </div>
+          {steps.length ? (
+            <RunTimeline steps={steps} />
+          ) : (
+            <div className="secondary">No step detail recorded.</div>
+          )}
+          {run?.error && (
+            <div className="callout red" style={{ marginTop: 12 }}>
+              <b>Run diagnostic</b>
+              {run.error}
+            </div>
+          )}
+        </section>
+        <section className="panel">
+          <h2 className="panel-title">Audit trail</h2>
+          <AuditTrail events={extra?.audit ?? i.audit ?? []} />
+        </section>
+      </div>
+    </>
+  );
+}

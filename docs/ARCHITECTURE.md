@@ -1,20 +1,28 @@
 # Architecture
 
-```mermaid
-flowchart LR
-  U[Accounting operator] --> W[Next.js App Router]
-  W --> API[Server API routes]
-  API --> E[Automation and validation engine]
-  E --> O[OpenAI structured extraction in Live mode]
-  E --> DB[(Supabase Postgres + private Storage)]
-  E --> N[n8n optional orchestration]
-  E --> M[Notification adapter]
-  DB --> W
-  W --> H[Human review and audit]
-```
+## Request and data path
 
-The React server-rendered workspace observes documents, queues, vendors, and runs. API routes validate untrusted uploads and review input; service credentials remain server-only. The extraction layer produces candidate fields only. Zod validates the shape, then deterministic validators check required fields, math, dates, duplicates, PO references, value, and confidence. A decision engine routes clean low-risk invoices or creates a human exception.
+The Next.js App Router renders the portfolio workspace. Server API routes validate upload, webhook, and review input and use the Supabase JavaScript client with a server-side service-role credential. The UI reads either deterministic fixtures in Demo Mode or persisted LedgerLens invoices in Live Mode.
 
-Supabase is the system of record: private document objects, invoices, line items, validation outcomes, automation runs, review items, notifications, settings, and immutable-style audit events. RLS blocks browser roles; server routes use service-role access after validation. OpenAI is optional and used only in live mode. n8n is optional orchestration around the app's ingestion/processing APIs, not a second implementation of financial policy. Email is optional; demo mode logs mock notifications.
+The document worker downloads the private source object, validates its signature, requests structured candidate fields from OpenAI when Live Mode is enabled, validates those fields with Zod, normalizes selected values, applies deterministic business rules, and writes invoice, line-item, validation, run, review, notification, and audit records to Supabase.
 
-The included UI ships with fictional deterministic fixtures for a useful no-credential preview. In Live Mode, uploads run synchronously through the worker, while Supabase persists outcomes and the workspace reads those records back. The route has a 120-second platform duration cap; a production deployment should move extraction to a durable background queue, and add authenticated user sessions and tenant-scoped RLS policies before exposing financial records to multiple customers.
+n8n and Resend are optional integrations. n8n may coordinate intake and downstream notifications. Resend can deliver review notifications. Neither service owns invoice validation or approval policy.
+
+## Data ownership
+
+LedgerLens tables use the ledgerlens_ prefix in public. Source documents use the private ledgerlens-invoice-documents bucket. The shared Supabase project also contains Northstar objects and a guestbook table used by Niven. The additive shared SQL is separate from the original per-app migrations because the applications do not share a Supabase CLI migration history.
+
+## Security and trust boundaries
+
+- Browser input, webhook payloads, uploaded files, and model output are untrusted.
+- File size, declared MIME type, and bytes are checked before processing; model output must satisfy a strict schema.
+- The service-role key bypasses RLS. RLS protects direct anon/authenticated table access but is not isolation between backends.
+- Current API routes have no end-user authentication. Do not expose live processing or sensitive documents to the public.
+- The webhook is unauthenticated when WEBHOOK_SECRET is blank.
+- Live extraction sends the uploaded document to OpenAI. Optional email sends notification contents to Resend.
+
+## Runtime limitations
+
+Live upload and reprocessing execute synchronously. The upload routes declare a 120-second maximum duration; there is no durable job queue, scheduler, retry/backoff service, or dead-letter mechanism. The current design is suitable for a controlled portfolio demo with synthetic data, not a multi-tenant production finance system.
+
+See TRD.md for integration and operations details, DATABASE_SCHEMA.md for schema, and IMPLEMENTATION_PLAN.md for verification status.

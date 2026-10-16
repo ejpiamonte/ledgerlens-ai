@@ -1,3 +1,73 @@
-import{NextResponse}from'next/server';import{z}from'zod';import{getAdminClient}from'@/lib/supabase/server';
-const input=z.object({reason:z.string().max(1000).optional()});
-export async function POST(req:Request,{params}:{params:Promise<{id:string}>}){const{id}=await params;let note='Approved by operator';try{const body=input.parse(await req.json());note=body.reason||note}catch{return NextResponse.json({error:'Invalid review note.'},{status:400})}try{const db=getAdminClient(),{data:invoice,error:loadError}=await db.from('ledgerlens_invoices').select('id,approval_status').eq('document_id',id).single();if(loadError||!invoice)return NextResponse.json({error:'Invoice not found.'},{status:404});if(invoice.approval_status!=='pending')return NextResponse.json({error:`Invoice is already ${invoice.approval_status}.`},{status:409});const at=new Date().toISOString();const{error:updateError}=await db.from('ledgerlens_invoices').update({approval_status:'approved',updated_at:at}).eq('id',invoice.id).eq('approval_status','pending');if(updateError)throw updateError;const updates=await Promise.all([db.from('ledgerlens_documents').update({status:'approved',review_status:'approved',updated_at:at}).eq('id',id),db.from('ledgerlens_review_queue').update({status:'approved',reviewed_by:'workspace operator',reviewed_at:at,notes:note}).eq('document_id',id).eq('status','pending'),db.from('ledgerlens_audit_logs').insert({document_id:id,invoice_id:invoice.id,action:'invoice_approved',actor_type:'human',actor_name:'Workspace operator',description:note}),db.from('ledgerlens_notifications').insert({document_id:id,invoice_id:invoice.id,notification_type:'approved',subject:'Invoice approved',body:note,status:'logged',provider:'demo-log',is_mock:true})]);if(updates.some(result=>result.error))throw new Error('Review decision could not be completely recorded.');return NextResponse.json({ok:true,message:'Invoice approved and audit event recorded.'})}catch{return NextResponse.json({error:'Approval requires a configured Supabase database and a persisted pending invoice.'},{status:503})}}
+import { NextResponse } from 'next/server';
+import { z } from 'zod';
+import { getAdminClient } from '@/lib/supabase/server';
+import { isDemoMode } from '@/lib/config';
+import { recordDemoDecision } from '@/lib/demo-review';
+const input = z.object({ reason: z.string().max(1000).optional() });
+export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  let note = 'Approved by operator';
+  try {
+    const body = input.parse(await req.json());
+    note = body.reason || note;
+  } catch {
+    return NextResponse.json({ error: 'Invalid review note.' }, { status: 400 });
+  }
+  if (isDemoMode())
+    return recordDemoDecision(id, 'approved', note === 'Approved by operator' ? undefined : note);
+  try {
+    const db = getAdminClient(),
+      { data: invoice, error: loadError } = await db
+        .from('ledgerlens_invoices')
+        .select('id,approval_status')
+        .eq('document_id', id)
+        .single();
+    if (loadError || !invoice) return NextResponse.json({ error: 'Invoice not found.' }, { status: 404 });
+    if (invoice.approval_status !== 'pending')
+      return NextResponse.json({ error: `Invoice is already ${invoice.approval_status}.` }, { status: 409 });
+    const at = new Date().toISOString();
+    const { error: updateError } = await db
+      .from('ledgerlens_invoices')
+      .update({ approval_status: 'approved', updated_at: at })
+      .eq('id', invoice.id)
+      .eq('approval_status', 'pending');
+    if (updateError) throw updateError;
+    const updates = await Promise.all([
+      db
+        .from('ledgerlens_documents')
+        .update({ status: 'approved', review_status: 'approved', updated_at: at })
+        .eq('id', id),
+      db
+        .from('ledgerlens_review_queue')
+        .update({ status: 'approved', reviewed_by: 'workspace operator', reviewed_at: at, notes: note })
+        .eq('document_id', id)
+        .eq('status', 'pending'),
+      db.from('ledgerlens_audit_logs').insert({
+        document_id: id,
+        invoice_id: invoice.id,
+        action: 'invoice_approved',
+        actor_type: 'human',
+        actor_name: 'Workspace operator',
+        description: note,
+      }),
+      db.from('ledgerlens_notifications').insert({
+        document_id: id,
+        invoice_id: invoice.id,
+        notification_type: 'approved',
+        subject: 'Invoice approved',
+        body: note,
+        status: 'logged',
+        provider: 'demo-log',
+        is_mock: true,
+      }),
+    ]);
+    if (updates.some((result) => result.error))
+      throw new Error('Review decision could not be completely recorded.');
+    return NextResponse.json({ ok: true, message: 'Invoice approved and audit event recorded.' });
+  } catch {
+    return NextResponse.json(
+      { error: 'Approval requires a configured Supabase database and a persisted pending invoice.' },
+      { status: 503 },
+    );
+  }
+}
